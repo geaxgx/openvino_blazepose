@@ -83,6 +83,7 @@ class BlazeposeOpenvino:
                 show_3d=False,
                 crop=False,
                 multi_detection=False,
+                force_detection=False,
                 output=None):
         
         self.pd_score_thresh = pd_score_thresh
@@ -94,9 +95,12 @@ class BlazeposeOpenvino:
         self.show_3d = show_3d
         self.crop = crop
         self.multi_detection = multi_detection
+        self.force_detection = force_detection
         if self.multi_detection:
-            print("With multi-detection, smoothing filter is disabled.")
+            print("Warning: with multi-detection, smoothing filter is disabled and pose detection is forced on every frame.")
             self.smoothing = False
+            self.force_detection = True
+        
         
         if input_src.endswith('.jpg') or input_src.endswith('.png') :
             self.input_type= "image"
@@ -114,10 +118,15 @@ class BlazeposeOpenvino:
             video_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print("Video FPS:", self.video_fps)
 
-        self.nb_kps = 33 if self.full_body else 25
+        # The full body landmark model predict 39 landmarks.
+        # We are interested in the first 35 landmarks 
+        # from 1 to 33 correspond to the well documented body parts,
+        # 34th (mid hips) and 35th (a point above the head) are used to predict ROI of next frame
+        # Same for upper body model but with 8 less landmarks 
+        self.nb_lms = 35 if self.full_body else 27
 
         if self.smoothing:
-            self.filter = mpu.LandmarksSmoothingFilter(filter_window_size, filter_velocity_scale, (self.nb_kps, 3))
+            self.filter = mpu.LandmarksSmoothingFilter(filter_window_size, filter_velocity_scale, (self.nb_lms-2, 3))
     
         # Create SSD anchors 
         # https://github.com/google/mediapipe/blob/master/mediapipe/modules/pose_detection/pose_detection_cpu.pbtxt
@@ -148,6 +157,7 @@ class BlazeposeOpenvino:
         self.show_scores = False
         self.show_gesture = self.use_gesture
         self.show_fps = True
+        self.show_segmentation = False
 
         if self.show_3d:
             self.vis3d = o3d.visualization.Visualizer()
@@ -265,9 +275,9 @@ class BlazeposeOpenvino:
                     y = int(r.pd_kps[kp][1] * self.frame_size)
                     cv2.circle(frame, (x, y), 3, (0,0,255), -1)
                     cv2.putText(frame, str(kp), (x, y+12), cv2.FONT_HERSHEY_PLAIN, 1.5, (0,255,0), 2)
-            if self.show_scores:
+            if self.show_scores and r.pd_score is not None:
                 cv2.putText(frame, f"Pose score: {r.pd_score:.2f}", 
-                        (int(r.pd_box[0] * self.frame_size+10), int((r.pd_box[1]+r.pd_box[3])*self.frame_size+60)), 
+                        (50, self.frame_size//2), 
                         cv2.FONT_HERSHEY_PLAIN, 2, (255,255,0), 2)
 
    
@@ -309,11 +319,11 @@ class BlazeposeOpenvino:
             src = np.array([(0, 0), (1, 0), (1, 1)], dtype=np.float32)
             dst = np.array([ (x, y) for x,y in region.rect_points[1:]], dtype=np.float32) # region.rect_points[0] is left bottom point and points going clockwise!
             mat = cv2.getAffineTransform(src, dst)
-            lm_xy = np.expand_dims(region.landmarks[:self.nb_kps,:2], axis=0)
+            lm_xy = np.expand_dims(region.landmarks[:self.nb_lms,:2], axis=0)
             lm_xy = np.squeeze(cv2.transform(lm_xy, mat))  
             # A segment of length 1 in the coordinates system of body bounding box takes region.rect_w_a pixels in the
             # original image. Then I arbitrarily divide by 4 for a more realistic appearance.
-            lm_z = region.landmarks[:self.nb_kps,2:3] * region.rect_w_a / 4
+            lm_z = region.landmarks[:self.nb_lms,2:3] * region.rect_w_a / 4
             lm_xyz = np.hstack((lm_xy, lm_z))
             if self.smoothing:
                 lm_xyz = self.filter.apply(lm_xyz)
@@ -328,9 +338,31 @@ class BlazeposeOpenvino:
 
             if self.use_gesture: self.recognize_gesture(region)
 
+            if self.show_segmentation:
+                self.seg = np.squeeze(inference[self.lm_segmentation]) 
+                self.seg = 1 / (1 + np.exp(-self.seg))
+
+            
+
 
     def lm_render(self, frame, region):
         if region.lm_score > self.lm_score_threshold:
+            if self.show_segmentation:
+                ret, mask = cv2.threshold(self.seg, 0.5, 1, cv2.THRESH_BINARY)
+                mask = (mask * 255).astype(np.uint8)
+                cv2.imshow("seg", self.seg)
+                # cv2.imshow("mask", mask)
+                src = np.array([[0,0],[128,0],[128,128]], dtype=np.float32) # rect_points[0] is left bottom point !
+                dst = np.array(region.rect_points[1:], dtype=np.float32)
+                mat = cv2.getAffineTransform(src, dst)
+                mask = cv2.warpAffine(mask, mat, (self.frame_size, self.frame_size))
+                # cv2.imshow("mask2", mask)
+                # mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+                l = frame.shape[0]
+                frame2 = cv2.bitwise_and(frame, frame, mask=mask)
+                if not self.crop:
+                    frame2 = frame2[self.pad_h:l-self.pad_h, self.pad_w:l-self.pad_w]
+                cv2.imshow("Segmentation", frame2)
             if self.show_rot_rect:
                 cv2.polylines(frame, [np.array(region.rect_points)], True, (0,255,255), 2, cv2.LINE_AA)
             if self.show_landmarks:
@@ -339,7 +371,7 @@ class BlazeposeOpenvino:
                 lines = [np.array([region.landmarks_padded[point,:2] for point in line]) for line in list_connections]
                 cv2.polylines(frame, lines, False, (255, 180, 90), 2, cv2.LINE_AA)
                 
-                for i,x_y in enumerate(region.landmarks_padded[:,:2]):
+                for i,x_y in enumerate(region.landmarks_padded[:self.nb_lms-2,:2]):
                     if i > 10:
                         color = (0,255,0) if i%2==0 else (0,0,255)
                     elif i == 0:
@@ -363,10 +395,10 @@ class BlazeposeOpenvino:
 
             if self.show_scores:
                 cv2.putText(frame, f"Landmark score: {region.lm_score:.2f}", 
-                        (int(region.pd_box[0] * self.frame_size+10), int((region.pd_box[1]+region.pd_box[3])*self.frame_size+90)), 
+                        (region.landmarks_padded[24,0]-10, region.landmarks_padded[24,1]+90), 
                         cv2.FONT_HERSHEY_PLAIN, 2, (255,255,0), 2)
             if self.use_gesture and self.show_gesture:
-                cv2.putText(frame, region.gesture, (int(region.pd_box[0]*self.frame_size+10), int(region.pd_box[1]*self.frame_size-50)), 
+                cv2.putText(frame, region.gesture, (region.landmarks_padded[6,0]-10, region.landmarks_padded[6,1]-50), 
                         cv2.FONT_HERSHEY_PLAIN, 5, (0,1190,255), 3)
             
 
@@ -394,47 +426,62 @@ class BlazeposeOpenvino:
 
         self.fps = FPS(mean_nb_frames=20)
 
+        nb_frames = 0
         nb_pd_inferences = 0
+        nb_pd_inferences_direct = 0 
         nb_lm_inferences = 0
+        nb_lm_inferences_after_landmarks_ROI = 0
         glob_pd_rtrip_time = 0
         glob_lm_rtrip_time = 0
+
+        get_new_frame = True
+        use_previous_landmarks = False
+
+        global_time = time.perf_counter()
         while True:
-            self.fps.update()
-             
-            if self.input_type == "image":
-                vid_frame = self.img
+            if get_new_frame:
+                nb_frames += 1
+                if self.input_type == "image":
+                    vid_frame = self.img
+                else:
+                    ok, vid_frame = self.cap.read()
+                    if not ok:
+                        break
+                h, w = vid_frame.shape[:2]
+                if self.crop:
+                    # Cropping the long side to get a square shape
+                    self.frame_size = min(h, w)
+                    dx = (w - self.frame_size) // 2
+                    dy = (h - self.frame_size) // 2
+                    video_frame = vid_frame[dy:dy+self.frame_size, dx:dx+self.frame_size]
+                else:
+                    # Padding on the small side to get a square shape
+                    self.frame_size = max(h, w)
+                    self.pad_h = int((self.frame_size - h)/2)
+                    self.pad_w = int((self.frame_size - w)/2)
+                    video_frame = cv2.copyMakeBorder(vid_frame, self.pad_h, self.pad_h, self.pad_w, self.pad_w, cv2.BORDER_CONSTANT)
+
+                annotated_frame = video_frame.copy()
+
+            if not self.force_detection and use_previous_landmarks:
+                self.regions = regions_from_landmarks
+                mpu.detections_to_rect(self.regions, kp_pair=[0,1]) # self.regions.pd_kps are initialized from landmarks on previous frame
+                mpu.rect_transformation(self.regions, self.frame_size, self.frame_size)
             else:
-                ok, vid_frame = self.cap.read()
-                if not ok:
-                    break
-            h, w = vid_frame.shape[:2]
-            if self.crop:
-                # Cropping the long side to get a square shape
-                self.frame_size = min(h, w)
-                dx = (w - self.frame_size) // 2
-                dy = (h - self.frame_size) // 2
-                video_frame = vid_frame[dy:dy+self.frame_size, dx:dx+self.frame_size]
-            else:
-                # Padding on the small side to get a square shape
-                self.frame_size = max(h, w)
-                self.pad_h = int((self.frame_size - h)/2)
-                self.pad_w = int((self.frame_size - w)/2)
-                video_frame = cv2.copyMakeBorder(vid_frame, self.pad_h, self.pad_h, self.pad_w, self.pad_w, cv2.BORDER_CONSTANT)
+                # Infer pose detection
+                # Resize image to NN square input shape
+                frame_nn = cv2.resize(video_frame, (self.pd_w, self.pd_h), interpolation=cv2.INTER_AREA)
+                # Transpose hxwx3 -> 1x3xhxw
+                frame_nn = np.transpose(frame_nn, (2,0,1))[None,]
+    
+                pd_rtrip_time = now()
+                inference = self.pd_exec_net.infer(inputs={self.pd_input_blob: frame_nn})
+                glob_pd_rtrip_time += now() - pd_rtrip_time
+                self.pd_postprocess(inference)
+                self.pd_render(annotated_frame)
+                nb_pd_inferences += 1
+                if get_new_frame: nb_pd_inferences_direct += 1
 
-            # Resize image to NN square input shape
-            frame_nn = cv2.resize(video_frame, (self.pd_w, self.pd_h), interpolation=cv2.INTER_AREA)
-            # Transpose hxwx3 -> 1x3xhxw
-            frame_nn = np.transpose(frame_nn, (2,0,1))[None,]
-
-            annotated_frame = video_frame.copy()
-
-            # Get pose detection
-            pd_rtrip_time = now()
-            inference = self.pd_exec_net.infer(inputs={self.pd_input_blob: frame_nn})
-            glob_pd_rtrip_time += now() - pd_rtrip_time
-            self.pd_postprocess(inference)
-            self.pd_render(annotated_frame)
-            nb_pd_inferences += 1
 
             # Landmarks
             self.nb_active_regions = 0
@@ -442,7 +489,20 @@ class BlazeposeOpenvino:
                 self.vis3d.clear_geometries()
                 self.vis3d.add_geometry(self.grid_floor, reset_bounding_box=False)
                 self.vis3d.add_geometry(self.grid_wall, reset_bounding_box=False)
-            for i,r in enumerate(self.regions):
+            if self.force_detection:
+                for r in self.regions:
+                    frame_nn = mpu.warp_rect_img(r.rect_points, video_frame, self.lm_w, self.lm_h)
+                    # Transpose hxwx3 -> 1x3xhxw
+                    frame_nn = np.transpose(frame_nn, (2,0,1))[None,]
+                    # Get landmarks
+                    lm_rtrip_time = now()
+                    inference = self.lm_exec_net.infer(inputs={self.lm_input_blob: frame_nn})
+                    glob_lm_rtrip_time += now() - lm_rtrip_time
+                    nb_lm_inferences += 1
+                    self.lm_postprocess(r, inference)
+                    self.lm_render(annotated_frame, r)
+            elif len(self.regions) == 1:
+                r = self.regions[0]
                 frame_nn = mpu.warp_rect_img(r.rect_points, video_frame, self.lm_w, self.lm_h)
                 # Transpose hxwx3 -> 1x3xhxw
                 frame_nn = np.transpose(frame_nn, (2,0,1))[None,]
@@ -451,8 +511,57 @@ class BlazeposeOpenvino:
                 inference = self.lm_exec_net.infer(inputs={self.lm_input_blob: frame_nn})
                 glob_lm_rtrip_time += now() - lm_rtrip_time
                 nb_lm_inferences += 1
+                if use_previous_landmarks:
+                    nb_lm_inferences_after_landmarks_ROI += 1
+
                 self.lm_postprocess(r, inference)
-                self.lm_render(annotated_frame, r)
+                if not self.force_detection:
+                    if get_new_frame:
+                        if not use_previous_landmarks: 
+                            # With a new frame, we have run the landmark NN on a ROI found by the detection NN...  
+                            if r.lm_score > self.lm_score_threshold:
+                                # ...and succesfully found a body and its landmarks
+                                # Predict the ROI for the next frame from the last 2 landmarks normalized coordinates (x,y)
+                                regions_from_landmarks = [mpu.Region(pd_kps=r.landmarks_padded[self.nb_lms-2:self.nb_lms,:2]/self.frame_size)]
+                                use_previous_landmarks = True
+                        else : 
+                            # With a new frame, we have run the landmark NN on a ROI calculated from the landmarks of the previous frame...
+                            if r.lm_score > self.lm_score_threshold:
+                                # ...and succesfully found a body and its landmarks
+                                # Predict the ROI for the next frame from the last 2 landmarks normalized coordinates (x,y)
+                                regions_from_landmarks = [mpu.Region(pd_kps=r.landmarks_padded[self.nb_lms-2:self.nb_lms,:2]/self.frame_size)]
+                                use_previous_landmarks = True
+                            else:
+                                # ...and could not find a body
+                                # We don't know if it is because the ROI calculated from the previous frame is not reliable (the body moved)
+                                # or because there is really no body in the frame. To decide, we have to run the detection NN on this frame
+                                get_new_frame = False
+                                use_previous_landmarks = False 
+                                continue
+                    else:
+                        # On a frame on which we already ran the landmark NN without founding a body,
+                        # we have run the detection NN...
+                        if r.lm_score > self.lm_score_threshold:
+                            # ...and succesfully found a body and its landmarks
+                            use_previous_landmarks = True
+                            # Predict the ROI for the next frame from the last 2 landmarks normalized coordinates (x,y)
+                            regions_from_landmarks = [mpu.Region(pd_kps=r.landmarks_padded[self.nb_lms-2:self.nb_lms,:2]/self.frame_size)]
+                            use_previous_landmarks = True
+                        # else:
+                            # ...and could not find a body
+                            # We are sure there is no body in that frame
+                        
+                        get_new_frame = True
+                self.lm_render(annotated_frame, r) 
+            else:
+                # Detection NN hasn't found any body
+                get_new_frame = True
+
+                    
+
+            self.fps.update()  
+                         
+                            
             if self.show_3d:
                 self.vis3d.poll_events()
                 self.vis3d.update_renderer()
@@ -489,12 +598,16 @@ class BlazeposeOpenvino:
                 self.show_gesture = not self.show_gesture
             elif key == ord('f'):
                 self.show_fps = not self.show_fps
+            elif key == ord('s'):
+                self.show_segmentation = not self.show_segmentation
 
         # Print some stats
-        print(f"# pose detection inferences : {nb_pd_inferences}")
-        print(f"# landmark inferences       : {nb_lm_inferences}")
+        print(f"FPS : {nb_frames/(time.perf_counter() - global_time):.1f} f/s (# frames = {nb_frames})")
+        print(f"# pose detection inferences : {nb_pd_inferences} - # direct: {nb_pd_inferences_direct} - # after landmarks ROI failures: {nb_pd_inferences-nb_pd_inferences_direct}")
+        print(f"# landmark inferences       : {nb_lm_inferences} - # after pose detection: {nb_lm_inferences - nb_lm_inferences_after_landmarks_ROI} - # after landmarks ROI prediction: {nb_lm_inferences_after_landmarks_ROI}")
         print(f"Pose detection round trip   : {glob_pd_rtrip_time/nb_pd_inferences*1000:.1f} ms")
-        print(f"Landmark round trip         : {glob_lm_rtrip_time/nb_lm_inferences*1000:.1f} ms")
+        if nb_lm_inferences: 
+            print(f"Landmark round trip         : {glob_lm_rtrip_time/nb_lm_inferences*1000:.1f} ms")
 
         if self.output:
             self.output.release()
@@ -514,6 +627,9 @@ if __name__ == "__main__":
                         help="Path to an .xml file for landmark model")
     parser.add_argument("--lm_device", default='CPU', type=str,
                         help="Target device for the landmark regression model (default=%(default)s)")
+    parser.add_argument('--min_tracking_conf', type=float, default=0.7,
+                        help="Minimum confidence value ([0.0, 1.0]) from the landmark-tracking model for the pose landmarks to be considered tracked successfully,"+
+                        " or otherwise person detection will be invoked automatically on the next input image. (default=%(default)s)")                    
     parser.add_argument('-c', '--crop', action="store_true", 
                         help="Center crop frames to a square shape before feeding pose detection model")
     parser.add_argument('-u', '--upper_body', action="store_true", 
@@ -529,7 +645,9 @@ if __name__ == "__main__":
     parser.add_argument("-o","--output",
                         help="Path to output video file")
     parser.add_argument('--multi_detection', action="store_true", 
-                        help="Force multiple person detection (at your own risk)")
+                        help="Force multiple person detection (at your own risk, the original Mediapipe implementation is designed for one person tracking)")
+    parser.add_argument('--force_detection', action="store_true", 
+                        help="Force person detection on every frame (never use landmarks from previous frame to determine ROI)")
 
     args = parser.parse_args()
 
@@ -545,6 +663,7 @@ if __name__ == "__main__":
                     pd_device=args.pd_device, 
                     lm_xml=args.lm_m,
                     lm_device=args.lm_device,
+                    lm_score_threshold=args.min_tracking_conf,
                     full_body=not args.upper_body,
                     smoothing=not args.no_smoothing,
                     filter_window_size=args.filter_window_size,
@@ -553,5 +672,6 @@ if __name__ == "__main__":
                     show_3d=args.show_3d,
                     crop=args.crop,
                     multi_detection=args.multi_detection,
+                    force_detection=args.force_detection,
                     output=args.output)
     ht.run()

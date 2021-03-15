@@ -2,12 +2,14 @@
 
 Running Google Mediapipe body pose tracking models on OpenVINO.
 
+The solution utilizes a two-step detector-tracker pipeline. A detector first locates the person/pose region-of-interest (ROI) within the frame. The tracker then predicts the pose landmarks within the ROI using the ROI-cropped frame as input. Note that the detector is invoked only as needed, i.e., for the very first frame and when the tracker could no longer identify body pose presence in the previous frame. For other frames the pipeline simply derives the ROI from the previous frame’s pose landmarks.
+
 For DepthAI version, please visit : [depthai_blazepose](https://github.com/geaxgx/depthai_blazepose)
 
 ![Demo](img/taichi.gif)
 ## Install
 
-You just need to have OpenVINO installed on your computer and to clone/download this repository.
+You need OpenVINO, OpenCV, open3d (for 3d visualization). installed on your computer and to clone/download this repository.
 
 Note that the models were generated using OpenVINO 2021.2.
 
@@ -20,10 +22,13 @@ Note that the models were generated using OpenVINO 2021.2.
 
 usage: BlazeposeOpenvino.py [-h] [-i INPUT] [-g] [--pd_m PD_M]
                             [--pd_device PD_DEVICE] [--lm_m LM_M]
-                            [--lm_device LM_DEVICE] [-c] [-u] [--no_smoothing]
+                            [--lm_device LM_DEVICE]
+                            [--min_tracking_conf MIN_TRACKING_CONF] [-c] [-u]
+                            [--no_smoothing]
                             [--filter_window_size FILTER_WINDOW_SIZE]
                             [--filter_velocity_scale FILTER_VELOCITY_SCALE]
                             [-3] [-o OUTPUT] [--multi_detection]
+                            [--force_detection]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -39,6 +44,12 @@ optional arguments:
   --lm_device LM_DEVICE
                         Target device for the landmark regression model
                         (default=CPU)
+  --min_tracking_conf MIN_TRACKING_CONF
+                        Minimum confidence value ([0.0, 1.0]) from the
+                        landmark-tracking model for the pose landmarks to be
+                        considered tracked successfully, or otherwise person
+                        detection will be invoked automatically on the next
+                        input image. (default=0.7)
   -c, --crop            Center crop frames to a square shape before feeding
                         pose detection model
   -u, --upper_body      Use an upper body model
@@ -53,7 +64,11 @@ optional arguments:
                         only for full body landmark model)
   -o OUTPUT, --output OUTPUT
                         Path to output video file
-  --multi_detection     Force multiple person detection (at your own risk)
+  --multi_detection     Force multiple person detection (at your own risk, the
+                        original Mediapipe implementation is designed for one
+                        person tracking only)
+  --force_detection     Force person detection on every frame (never use
+                        landmarks from previous frame to determine ROI)
 
 ```
 **Examples :**
@@ -84,7 +99,15 @@ optional arguments:
 
 - By default, a temporal filter smoothes the landmark positions. You can tune the smoothing with the arguments *--filter_window_size* and *--filter_velocity_scale*. Use *--no_smoothing* to disable the filter.
 
-Use keypress between 1 and 6 to enable/disable the display of body features (bounding box, landmarks, scores, gesture,...), 'f' to show/hide FPS, spacebar to pause, Esc to exit.
+Use keypress between 1 and 6 to enable/disable the display of body features (bounding box, landmarks, scores, gesture,...), 'f' to show/hide FPS, 's' to show the segmentation output (see explanation below), spacebar to pause, Esc to exit.
+
+**Segmentation :**
+
+*Note this is a totally experimental feature since I couldn't find any related documentation.*
+
+In addition to the landmarks and a score, the tracker neural net outputs a 1x128x128 array called 'output_segmentation'. After applying the sigmoid function to this array, you can use the result as a mask on the original picture. This is what you get (can be displayed with keystroke 's'):
+
+![Segmentation](img/segmentation.png)
 
 
 

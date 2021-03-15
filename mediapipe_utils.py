@@ -6,7 +6,7 @@ import time
 from collections import deque, namedtuple
 
 class Region:
-    def __init__(self, pd_score, pd_box, pd_kps=0):
+    def __init__(self, pd_score=None, pd_box=None, pd_kps=None):
         self.pd_score = pd_score # Pose detection score 
         self.pd_box = pd_box # Pose detection box [x, y, w, h] normalized
         self.pd_kps = pd_kps # Pose detection keypoints
@@ -199,10 +199,6 @@ def non_max_suppression(regions, nms_thresh):
 
 def normalize_radians(angle):
     return angle - 2 * pi * floor((angle + pi) / (2 * pi))
-
-def rot_vec(vec, rotation):
-    vx, vy = vec
-    return [vx * cos(rotation) - vy * sin(rotation), vx * sin(rotation) + vy * cos(rotation)]
 
 def detections_to_rect(regions, kp_pair=[0,1]):
     # https://github.com/google/mediapipe/blob/master/mediapipe/modules/pose_landmark/pose_detection_to_roi.pbtxt
