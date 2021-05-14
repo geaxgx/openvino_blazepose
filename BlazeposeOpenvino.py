@@ -198,7 +198,7 @@ class BlazeposeOpenvino:
         pd_bin = pd_name + '.bin'
         print("Pose Detection model - Reading network files:\n\t{}\n\t{}".format(pd_xml, pd_bin))
         self.pd_net = self.ie.read_network(model=pd_xml, weights=pd_bin)
-        # Input blob: input - shape: [1, 3, 128, 128]
+        # Input blob: input - shape: [1, 3, 224, 224]
         # Output blob: Identity - shape: [1, 2254, 12]
         # Output blob: Identity_1 - shape: [1, 2254, 1]
 
@@ -230,32 +230,19 @@ class BlazeposeOpenvino:
         print("Landmark model - Reading network files:\n\t{}\n\t{}".format(lm_xml, lm_bin))
         self.lm_net = self.ie.read_network(model=lm_xml, weights=lm_bin)
         # Input blob: input_1 - shape: [1, 3, 256, 256]
-        # Outputs name depends on the model:
-        # - For "lite" model :
         # Output blob: ld_3d - shape: [1, 195]
         # Output blob: output_heatmap - shape: [1, 39, 64, 64]
         # Output blob: output_poseflag - shape: [1, 1]
-        # Output blob: output_segmentation - shape: [1, 1, 128, 128]
+        # Output blob: output_segmentation - shape: [1, 1, 128, 128] (for lite and heavy) or [1, 1, 256, 256] (for full)
         # Output blob: world_3d - shape: [1, 117]
-        # For "full" or "heavy" models
-        # Output blob: Identity - shape: [1, 195]
-        # Output blob: Identity_1 - shape: [1, 1]
-        # Output blob: Identity_2 - shape: [1, 1, 256, 256]
-        # Output blob: Identity_3 - shape: [1, 39, 64, 64]
-        # Output blob: Identity_4 - shape: [1, 117]
         self.lm_input_blob = next(iter(self.lm_net.input_info))
         print(f"Input blob: {self.lm_input_blob} - shape: {self.lm_net.input_info[self.lm_input_blob].input_data.shape}")
         _,_,self.lm_h,self.lm_w = self.lm_net.input_info[self.lm_input_blob].input_data.shape
         for o in self.lm_net.outputs.keys():
             print(f"Output blob: {o} - shape: {self.lm_net.outputs[o].shape}")
-        if "Identity" in self.lm_net.outputs.keys():    
-            self.lm_score = "Identity_1" #"output_poseflag"
-            self.lm_segmentation = "Identity_2" #"output_segmentation"
-            self.lm_landmarks = "Identity" #ld_3d"
-        else:
-            self.lm_score = "output_poseflag"
-            self.lm_segmentation = "output_segmentation"
-            self.lm_landmarks = "ld_3d"
+        self.lm_score = "output_poseflag"
+        self.lm_segmentation = "output_segmentation"
+        self.lm_landmarks = "ld_3d"
         self.segmentation_size = self.lm_net.outputs[self.lm_segmentation].shape[-1]
         print("Loading landmark model to the plugin")
         self.lm_exec_net = self.ie.load_network(network=self.lm_net, num_requests=1, device_name=lm_device)
