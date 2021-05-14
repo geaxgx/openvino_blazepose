@@ -87,17 +87,17 @@ optional arguments:
 
     ```python3 BlazeposeOpenvino.py -3```
 
-- To demo gesture recognition :
-
-    ```python3 BlazeposeOpenvino.py -g```
-
-    This is a very basic demo that can read semaphore alphabet by measuring arm angles.
-
 - To change the version of the landmark model (default="full", other options are "lite" (faster but less accurate) and "heavy" (more accurate but slower). Example :
 
     ```python3 BlazeposeOpenvino.py --lm_version heavy```
 
     [More information and comparison between model versions.](https://google.github.io/mediapipe/solutions/pose#pose-estimation-quality)
+
+- To demo gesture recognition :
+
+    ```python3 BlazeposeOpenvino.py -g```
+
+    This is a very basic demo that can read semaphore alphabet by measuring arm angles.
 
 ![Gesture recognition](img/semaphore.gif)
 
