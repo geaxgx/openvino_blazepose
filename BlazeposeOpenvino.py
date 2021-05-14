@@ -13,10 +13,11 @@ import open3d as o3d
 from o3d_utils import create_segment, create_grid
 import time
 
-POSE_DETECTION_MODEL = "models/pose_detection_FP32.xml"
-FULL_BODY_LANDMARK_MODEL = "models/pose_landmark_full_body_FP32.xml"
-UPPER_BODY_LANDMARK_MODEL = "models/pose_landmark_upper_body_FP32.xml"
-
+SCRIPT_DIR = Path(__file__).resolve().parent
+POSE_DETECTION_MODEL = SCRIPT_DIR / "models/pose_detection_FP32.xml"
+LANDMARK_MODEL_FULL = SCRIPT_DIR / "models/pose_landmark_full_FP32.xml"
+LANDMARK_MODEL_LITE = SCRIPT_DIR / "models/pose_landmark_lite_FP32.xml"
+LANDMARK_MODEL_HEAVY = SCRIPT_DIR / "models/pose_landmark_heavy_FP32.xml"
 
 # LINES_*_BODY are used when drawing the skeleton onto the source image. 
 # Each variable is a list of continuous lines.
@@ -72,10 +73,9 @@ class BlazeposeOpenvino:
                 pd_xml=POSE_DETECTION_MODEL, 
                 pd_device="CPU",
                 pd_score_thresh=0.5, pd_nms_thresh=0.3,
-                lm_xml=FULL_BODY_LANDMARK_MODEL,
+                lm_xml=LANDMARK_MODEL_FULL,
                 lm_device="CPU",
                 lm_score_threshold=0.7,
-                full_body=True,
                 use_gesture=False,
                 smoothing= True,
                 filter_window_size=5,
@@ -89,7 +89,7 @@ class BlazeposeOpenvino:
         self.pd_score_thresh = pd_score_thresh
         self.pd_nms_thresh = pd_nms_thresh
         self.lm_score_threshold = lm_score_threshold
-        self.full_body = full_body
+        self.full_body = True
         self.use_gesture = use_gesture
         self.smoothing = smoothing
         self.show_3d = show_3d
@@ -122,32 +122,36 @@ class BlazeposeOpenvino:
         # We are interested in the first 35 landmarks 
         # from 1 to 33 correspond to the well documented body parts,
         # 34th (mid hips) and 35th (a point above the head) are used to predict ROI of next frame
-        # Same for upper body model but with 8 less landmarks 
-        self.nb_lms = 35 if self.full_body else 27
+        self.nb_lms = 35
 
         if self.smoothing:
             self.filter = mpu.LandmarksSmoothingFilter(filter_window_size, filter_velocity_scale, (self.nb_lms-2, 3))
     
+        # Load Openvino models
+        self.load_models(pd_xml, pd_device, lm_xml, lm_device)
+
         # Create SSD anchors 
         # https://github.com/google/mediapipe/blob/master/mediapipe/modules/pose_detection/pose_detection_cpu.pbtxt
-        anchor_options = mpu.SSDAnchorOptions(num_layers=4, 
+
+        anchor_options = mpu.SSDAnchorOptions(
+                                num_layers=5, 
                                 min_scale=0.1484375,
                                 max_scale=0.75,
-                                input_size_height=128,
-                                input_size_width=128,
+                                input_size_height=224,
+                                input_size_width=224,
                                 anchor_offset_x=0.5,
                                 anchor_offset_y=0.5,
-                                strides=[8, 16, 16, 16],
+                                strides=[8, 16, 32, 32, 32],
                                 aspect_ratios= [1.0],
                                 reduce_boxes_in_lowest_layer=False,
                                 interpolated_scale_aspect_ratio=1.0,
                                 fixed_anchor_size=True)
+
         self.anchors = mpu.generate_anchors(anchor_options)
         self.nb_anchors = self.anchors.shape[0]
         print(f"{self.nb_anchors} anchors have been created")
 
-        # Load Openvino models
-        self.load_models(pd_xml, pd_device, lm_xml, lm_device)
+        
 
         # Rendering flags
         self.show_pd_box = False
@@ -195,15 +199,16 @@ class BlazeposeOpenvino:
         print("Pose Detection model - Reading network files:\n\t{}\n\t{}".format(pd_xml, pd_bin))
         self.pd_net = self.ie.read_network(model=pd_xml, weights=pd_bin)
         # Input blob: input - shape: [1, 3, 128, 128]
-        # Output blob: classificators - shape: [1, 896, 1] : scores
-        # Output blob: regressors - shape: [1, 896, 12] : bboxes
+        # Output blob: Identity - shape: [1, 2254, 12]
+        # Output blob: Identity_1 - shape: [1, 2254, 1]
+
         self.pd_input_blob = next(iter(self.pd_net.input_info))
         print(f"Input blob: {self.pd_input_blob} - shape: {self.pd_net.input_info[self.pd_input_blob].input_data.shape}")
         _,_,self.pd_h,self.pd_w = self.pd_net.input_info[self.pd_input_blob].input_data.shape
         for o in self.pd_net.outputs.keys():
             print(f"Output blob: {o} - shape: {self.pd_net.outputs[o].shape}")
-            self.pd_scores = "classificators"
-            self.pd_bboxes = "regressors"
+        self.pd_scores = "Identity_1"
+        self.pd_bboxes = "Identity"
         print("Loading pose detection model into the plugin")
         self.pd_exec_net = self.ie.load_network(network=self.pd_net, num_requests=1, device_name=pd_device)
         self.pd_infer_time_cumul = 0
@@ -225,17 +230,33 @@ class BlazeposeOpenvino:
         print("Landmark model - Reading network files:\n\t{}\n\t{}".format(lm_xml, lm_bin))
         self.lm_net = self.ie.read_network(model=lm_xml, weights=lm_bin)
         # Input blob: input_1 - shape: [1, 3, 256, 256]
-        # Output blob: ld_3d - shape: [1, 195]  for full body or [1, 155] for upper body
+        # Outputs name depends on the model:
+        # - For "lite" model :
+        # Output blob: ld_3d - shape: [1, 195]
+        # Output blob: output_heatmap - shape: [1, 39, 64, 64]
         # Output blob: output_poseflag - shape: [1, 1]
         # Output blob: output_segmentation - shape: [1, 1, 128, 128]
+        # Output blob: world_3d - shape: [1, 117]
+        # For "full" or "heavy" models
+        # Output blob: Identity - shape: [1, 195]
+        # Output blob: Identity_1 - shape: [1, 1]
+        # Output blob: Identity_2 - shape: [1, 1, 256, 256]
+        # Output blob: Identity_3 - shape: [1, 39, 64, 64]
+        # Output blob: Identity_4 - shape: [1, 117]
         self.lm_input_blob = next(iter(self.lm_net.input_info))
         print(f"Input blob: {self.lm_input_blob} - shape: {self.lm_net.input_info[self.lm_input_blob].input_data.shape}")
         _,_,self.lm_h,self.lm_w = self.lm_net.input_info[self.lm_input_blob].input_data.shape
         for o in self.lm_net.outputs.keys():
             print(f"Output blob: {o} - shape: {self.lm_net.outputs[o].shape}")
-        self.lm_score = "output_poseflag"
-        self.lm_segmentation = "output_segmentation"
-        self.lm_landmarks = "ld_3d"
+        if "Identity" in self.lm_net.outputs.keys():    
+            self.lm_score = "Identity_1" #"output_poseflag"
+            self.lm_segmentation = "Identity_2" #"output_segmentation"
+            self.lm_landmarks = "Identity" #ld_3d"
+        else:
+            self.lm_score = "output_poseflag"
+            self.lm_segmentation = "output_segmentation"
+            self.lm_landmarks = "ld_3d"
+        self.segmentation_size = self.lm_net.outputs[self.lm_segmentation].shape[-1]
         print("Loading landmark model to the plugin")
         self.lm_exec_net = self.ie.load_network(network=self.lm_net, num_requests=1, device_name=lm_device)
         self.lm_infer_time_cumul = 0
@@ -243,8 +264,8 @@ class BlazeposeOpenvino:
 
     
     def pd_postprocess(self, inference):
-        scores = np.squeeze(inference[self.pd_scores])  # 896
-        bboxes = inference[self.pd_bboxes][0] # 896x12
+        scores = np.squeeze(inference[self.pd_scores])  # 2254
+        bboxes = inference[self.pd_bboxes][0] # 2254x12
         # Decode bboxes
         self.regions = mpu.decode_bboxes(self.pd_score_thresh, scores, bboxes, self.anchors, best_only=not self.multi_detection)
         # Non maximum suppression (not needed if best_only is True)
@@ -342,8 +363,6 @@ class BlazeposeOpenvino:
                 self.seg = np.squeeze(inference[self.lm_segmentation]) 
                 self.seg = 1 / (1 + np.exp(-self.seg))
 
-            
-
 
     def lm_render(self, frame, region):
         if region.lm_score > self.lm_score_threshold:
@@ -352,7 +371,7 @@ class BlazeposeOpenvino:
                 mask = (mask * 255).astype(np.uint8)
                 cv2.imshow("seg", self.seg)
                 # cv2.imshow("mask", mask)
-                src = np.array([[0,0],[128,0],[128,128]], dtype=np.float32) # rect_points[0] is left bottom point !
+                src = np.array([[0,0],[self.segmentation_size,0],[self.segmentation_size,self.segmentation_size]], dtype=np.float32) # rect_points[0] is left bottom point !
                 dst = np.array(region.rect_points[1:], dtype=np.float32)
                 mat = cv2.getAffineTransform(src, dst)
                 mask = cv2.warpAffine(mask, mat, (self.frame_size, self.frame_size))
@@ -418,15 +437,14 @@ class BlazeposeOpenvino:
         # For this task, we just need to measure the angles of both arms with vertical
         right_arm_angle = angle_with_y(r.landmarks_abs[14,:2] - r.landmarks_abs[12,:2])
         left_arm_angle = angle_with_y(r.landmarks_abs[13,:2] - r.landmarks_abs[11,:2])
-        right_pose = int((right_arm_angle +202.5) / 45) 
-        left_pose = int((left_arm_angle +202.5) / 45) 
+        right_pose = int((right_arm_angle +202.5) / 45) % 8
+        left_pose = int((left_arm_angle +202.5) / 45) % 8
         r.gesture = semaphore_flag.get((right_pose, left_pose), None)
                 
     def run(self):
 
-        self.fps = FPS(mean_nb_frames=20)
+        self.fps = FPS()
 
-        nb_frames = 0
         nb_pd_inferences = 0
         nb_pd_inferences_direct = 0 
         nb_lm_inferences = 0
@@ -440,7 +458,7 @@ class BlazeposeOpenvino:
         global_time = time.perf_counter()
         while True:
             if get_new_frame:
-                nb_frames += 1
+                
                 if self.input_type == "image":
                     vid_frame = self.img
                 else:
@@ -460,7 +478,6 @@ class BlazeposeOpenvino:
                     self.pad_h = int((self.frame_size - h)/2)
                     self.pad_w = int((self.frame_size - w)/2)
                     video_frame = cv2.copyMakeBorder(vid_frame, self.pad_h, self.pad_h, self.pad_w, self.pad_w, cv2.BORDER_CONSTANT)
-
                 annotated_frame = video_frame.copy()
 
             if not self.force_detection and use_previous_landmarks:
@@ -572,7 +589,7 @@ class BlazeposeOpenvino:
                 annotated_frame = annotated_frame[self.pad_h:self.pad_h+h, self.pad_w:self.pad_w+w]
 
             if self.show_fps:
-                self.fps.display(annotated_frame, orig=(50,50), size=1, color=(240,180,100))
+                self.fps.draw(annotated_frame, orig=(50,50), size=1, color=(240,180,100))
             cv2.imshow("Blazepose", annotated_frame)
 
             if self.output:
@@ -602,7 +619,8 @@ class BlazeposeOpenvino:
                 self.show_segmentation = not self.show_segmentation
 
         # Print some stats
-        print(f"FPS : {nb_frames/(time.perf_counter() - global_time):.1f} f/s (# frames = {nb_frames})")
+        global_fps, nb_frames = self.fps.get_global()
+        print(f"FPS : {global_fps:.1f} f/s (# frames = {nb_frames})")
         print(f"# pose detection inferences : {nb_pd_inferences} - # direct: {nb_pd_inferences_direct} - # after landmarks ROI failures: {nb_pd_inferences-nb_pd_inferences_direct}")
         print(f"# landmark inferences       : {nb_lm_inferences} - # after pose detection: {nb_lm_inferences - nb_lm_inferences_after_landmarks_ROI} - # after landmarks ROI prediction: {nb_lm_inferences_after_landmarks_ROI}")
         print(f"Pose detection round trip   : {glob_pd_rtrip_time/nb_pd_inferences*1000:.1f} ms")
@@ -619,12 +637,14 @@ if __name__ == "__main__":
                         help="Path to video or image file to use as input (default=%(default)s)")
     parser.add_argument('-g', '--gesture', action="store_true", 
                         help="enable gesture recognition")
-    parser.add_argument("--pd_m", type=str,
+    parser.add_argument("--pd_xml", type=str,
                         help="Path to an .xml file for pose detection model")
     parser.add_argument("--pd_device", default='CPU', type=str,
                         help="Target device for the pose detection model (default=%(default)s)")  
-    parser.add_argument("--lm_m", type=str,
+    parser.add_argument("--lm_xml", type=str,
                         help="Path to an .xml file for landmark model")
+    parser.add_argument("--lm_version", type=str, choices=['full', 'lite', 'heavy'], default="full",
+                        help="Version of the landmark model (default=%(default)s)")
     parser.add_argument("--lm_device", default='CPU', type=str,
                         help="Target device for the landmark regression model (default=%(default)s)")
     parser.add_argument('--min_tracking_conf', type=float, default=0.7,
@@ -632,8 +652,6 @@ if __name__ == "__main__":
                         " or otherwise person detection will be invoked automatically on the next input image. (default=%(default)s)")                    
     parser.add_argument('-c', '--crop', action="store_true", 
                         help="Center crop frames to a square shape before feeding pose detection model")
-    parser.add_argument('-u', '--upper_body', action="store_true", 
-                        help="Use an upper body model")
     parser.add_argument('--no_smoothing', action="store_true", 
                         help="Disable smoothing filter")
     parser.add_argument('--filter_window_size', type=int, default=5,
@@ -651,20 +669,21 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if not args.pd_m:
-        args.pd_m = POSE_DETECTION_MODEL
-    if not args.lm_m:
-        if args.upper_body:
-            args.lm_m = UPPER_BODY_LANDMARK_MODEL
-        else:
-            args.lm_m = FULL_BODY_LANDMARK_MODEL
+    if not args.pd_xml:
+        args.pd_xml = POSE_DETECTION_MODEL
+    if not args.lm_xml:
+        if args.lm_version == "full":
+            args.lm_xml = LANDMARK_MODEL_FULL
+        elif args.lm_version == "lite":
+            args.lm_xml = LANDMARK_MODEL_LITE
+        elif args.lm_version == "heavy":
+            args.lm_xml = LANDMARK_MODEL_HEAVY
     ht = BlazeposeOpenvino(input_src=args.input, 
-                    pd_xml=args.pd_m,
+                    pd_xml=args.pd_xml,
                     pd_device=args.pd_device, 
-                    lm_xml=args.lm_m,
+                    lm_xml=args.lm_xml,
                     lm_device=args.lm_device,
                     lm_score_threshold=args.min_tracking_conf,
-                    full_body=not args.upper_body,
                     smoothing=not args.no_smoothing,
                     filter_window_size=args.filter_window_size,
                     filter_velocity_scale=args.filter_velocity_scale,

@@ -25,14 +25,15 @@ convert_model () {
 		--model_output_path ${model_name} \
 		--flatc_path ../../flatc \
 		--schema_path ../../schema.fbs \
-		--output_pb True
+		--output_pb \
+		--optimizing_for_openvino_and_myriad
 	# Generate Openvino "non normalized input" models: the normalization has to be mode explictly in the code
 	#tflite2tensorflow \
 	#  --model_path ${model_name}.tflite \
 	#  --model_output_path ${model_name} \
 	#  --flatc_path ../../flatc \
 	#  --schema_path ../../schema.fbs \
-	#  --output_openvino_and_myriad True 
+	#  --output_openvino_and_myriad 
 	# Generate Openvino "normalized input" models 
 	/opt/intel/openvino_2021/deployment_tools/model_optimizer/mo_tf.py \
 		--input_model ${model_name}/model_float32.pb \
@@ -44,7 +45,7 @@ convert_model () {
 }
 
 convert_model pose_detection "[127.5,127.5,127.5]"  "[127.5,127.5,127.5]"
-convert_model pose_landmark_full_body "" "[255.0,255.0,255.0]"
-convert_model pose_landmark_upper_body "" "[255.0,255.0,255.0]"
-
+convert_model pose_landmark_full "" "[255.0,255.0,255.0]"
+convert_model pose_landmark_lite "" "[255.0,255.0,255.0]"
+convert_model pose_landmark_heavy "" "[255.0,255.0,255.0]"
 

@@ -1,6 +1,6 @@
 # Blazepose tracking with OpenVINO
 
-Running Google Mediapipe body pose tracking models on OpenVINO.
+Running Google Mediapipe body pose tracking models on OpenVINO (**Updated with the models of mediapipe 0.8.4 2021/05**).
 
 The solution utilizes a two-step detector-tracker pipeline. A detector first locates the person/pose region-of-interest (ROI) within the frame. The tracker then predicts the pose landmarks within the ROI using the ROI-cropped frame as input. Note that the detector is invoked only as needed, i.e., for the very first frame and when the tracker could no longer identify body pose presence in the previous frame. For other frames the pipeline simply derives the ROI from the previous frame’s pose landmarks.
 
@@ -20,10 +20,11 @@ Note that the models were generated using OpenVINO 2021.2.
 ```
 > python BlazeposeOpenvino.py  -h
 
-usage: BlazeposeOpenvino.py [-h] [-i INPUT] [-g] [--pd_m PD_M]
-                            [--pd_device PD_DEVICE] [--lm_m LM_M]
+usage: BlazeposeOpenvino.py [-h] [-i INPUT] [-g] [--pd_xml PD_XML]
+                            [--pd_device PD_DEVICE] [--lm_xml LM_XML]
+                            [--lm_version {full,lite,heavy}]
                             [--lm_device LM_DEVICE]
-                            [--min_tracking_conf MIN_TRACKING_CONF] [-c] [-u]
+                            [--min_tracking_conf MIN_TRACKING_CONF] [-c]
                             [--no_smoothing]
                             [--filter_window_size FILTER_WINDOW_SIZE]
                             [--filter_velocity_scale FILTER_VELOCITY_SCALE]
@@ -36,11 +37,13 @@ optional arguments:
                         Path to video or image file to use as input
                         (default=0)
   -g, --gesture         enable gesture recognition
-  --pd_m PD_M           Path to an .xml file for pose detection model
+  --pd_xml PD_XML       Path to an .xml file for pose detection model
   --pd_device PD_DEVICE
                         Target device for the pose detection model
                         (default=CPU)
-  --lm_m LM_M           Path to an .xml file for landmark model
+  --lm_xml LM_XML       Path to an .xml file for landmark model
+  --lm_version {full,lite,heavy}
+                        Version of the landmark model (default=full)
   --lm_device LM_DEVICE
                         Target device for the landmark regression model
                         (default=CPU)
@@ -52,7 +55,6 @@ optional arguments:
                         input image. (default=0.7)
   -c, --crop            Center crop frames to a square shape before feeding
                         pose detection model
-  -u, --upper_body      Use an upper body model
   --no_smoothing        Disable smoothing filter
   --filter_window_size FILTER_WINDOW_SIZE
                         Smoothing filter window size. Higher value adds to lag
@@ -66,7 +68,7 @@ optional arguments:
                         Path to output video file
   --multi_detection     Force multiple person detection (at your own risk, the
                         original Mediapipe implementation is designed for one
-                        person tracking only)
+                        person tracking)
   --force_detection     Force person detection on every frame (never use
                         landmarks from previous frame to determine ROI)
 
@@ -91,6 +93,12 @@ optional arguments:
 
     This is a very basic demo that can read semaphore alphabet by measuring arm angles.
 
+- To change the version of the landmark model (default="full", other options are "lite" (faster but less accurate) and "heavy" (more accurate but slower). Example :
+
+    ```python3 BlazeposeOpenvino.py --lm_version heavy```
+
+    [More information and comparison between model versions.](https://google.github.io/mediapipe/solutions/pose#pose-estimation-quality)
+
 ![Gesture recognition](img/semaphore.gif)
 
 - By default, the inferences are run on the CPU. For each model, you can choose the device where to run the model. For instance, if you want to run both models on a NCS2 :
@@ -105,7 +113,7 @@ Use keypress between 1 and 6 to enable/disable the display of body features (bou
 
 *Note this is a totally experimental feature since I couldn't find any related documentation.*
 
-In addition to the landmarks and a score, the tracker neural net outputs a 1x128x128 array called 'output_segmentation'. After applying the sigmoid function to this array, you can use the result as a mask on the original picture. This is what you get (can be displayed with keystroke 's'):
+In addition to the landmarks and a score, the tracker neural net outputs an array called 'output_segmentation'. After applying the sigmoid function to this array, you can use the result as a mask on the original picture. This is what you get (can be displayed with keystroke 's'):
 
 ![Segmentation](img/segmentation.png)
 
@@ -117,13 +125,15 @@ You can directly find the model files (.xml and .bin) under the 'models' directo
 1) Clone this github repository in a local directory (DEST_DIR)
 2) In DEST_DIR/models directory, download the source tflite models from Mediapipe:
 * [Pose detection model](https://github.com/google/mediapipe/blob/master/mediapipe/modules/pose_detection/pose_detection.tflite)
-* [Full-body pose landmark model](https://github.com/google/mediapipe/tree/master/mediapipe/modules/pose_landmark/pose_landmark_full_body.tflite)
-* [Upper-body pose landmark model](https://github.com/google/mediapipe/tree/master/mediapipe/modules/pose_landmark/pose_landmark_upper_body.tflite)
+* [Full pose landmark model](https://github.com/google/mediapipe/tree/master/mediapipe/modules/pose_landmark/pose_landmark_full.tflite)
+* [Lite pose landmark model](https://github.com/google/mediapipe/tree/master/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite)
+* [Heavy pose landmark model](https://github.com/google/mediapipe/tree/master/mediapipe/modules/pose_landmark/pose_landmark_heavy.tflite)
+
 3) Install the amazing [PINTO's tflite2tensorflow tool](https://github.com/PINTO0309/tflite2tensorflow). Use the docker installation which includes many packages including a recent version of Openvino.
 3) From DEST_DIR, run the tflite2tensorflow container:  ```./docker_tflite2tensorflow.sh```
 4) From the running container: 
 ```
-cd resources/models
+cd workdir
 ./convert_models.sh
 ```
 The *convert_models.sh* converts the tflite models in tensorflow (.pb), then converts the pb file into Openvino IR format (.xml and .bin). By default, the precision used is FP32. To generate in FP16 precision, run ```./convert_models.sh FP16```
