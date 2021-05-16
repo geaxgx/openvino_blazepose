@@ -75,7 +75,7 @@ class BlazeposeOpenvino:
                 pd_score_thresh=0.5, pd_nms_thresh=0.3,
                 lm_xml=LANDMARK_MODEL_FULL,
                 lm_device="CPU",
-                lm_score_threshold=0.7,
+                lm_score_threshold=0.5,
                 use_gesture=False,
                 smoothing= True,
                 filter_window_size=5,
@@ -220,10 +220,10 @@ class BlazeposeOpenvino:
         # Landmarks model
         if lm_device != pd_device:
             print("Device info:")
-            versions = self.ie.get_versions(pd_device)
-            print("{}{}".format(" "*8, pd_device))
-            print("{}MKLDNNPlugin version ......... {}.{}".format(" "*8, versions[pd_device].major, versions[pd_device].minor))
-            print("{}Build ........... {}".format(" "*8, versions[pd_device].build_number))
+            versions = self.ie.get_versions(lm_device)
+            print("{}{}".format(" "*8, lm_device))
+            print("{}MKLDNNPlugin version ......... {}.{}".format(" "*8, versions[lm_device].major, versions[lm_device].minor))
+            print("{}Build ........... {}".format(" "*8, versions[lm_device].build_number))
 
         lm_name = os.path.splitext(lm_xml)[0]
         lm_bin = lm_name + '.bin'
@@ -286,7 +286,7 @@ class BlazeposeOpenvino:
             if self.show_scores and r.pd_score is not None:
                 cv2.putText(frame, f"Pose score: {r.pd_score:.2f}", 
                         (50, self.frame_size//2), 
-                        cv2.FONT_HERSHEY_PLAIN, 2, (255,255,0), 2)
+                        cv2.FONT_HERSHEY_PLAIN, 1.5, (255,255,0), 2)
 
    
     def lm_postprocess(self, region, inference):
@@ -402,7 +402,7 @@ class BlazeposeOpenvino:
             if self.show_scores:
                 cv2.putText(frame, f"Landmark score: {region.lm_score:.2f}", 
                         (region.landmarks_padded[24,0]-10, region.landmarks_padded[24,1]+90), 
-                        cv2.FONT_HERSHEY_PLAIN, 2, (255,255,0), 2)
+                        cv2.FONT_HERSHEY_PLAIN, 1.5, (255,255,0), 2)
             if self.use_gesture and self.show_gesture:
                 cv2.putText(frame, region.gesture, (region.landmarks_padded[6,0]-10, region.landmarks_padded[6,1]-50), 
                         cv2.FONT_HERSHEY_PLAIN, 5, (0,1190,255), 3)
@@ -634,7 +634,7 @@ if __name__ == "__main__":
                         help="Version of the landmark model (default=%(default)s)")
     parser.add_argument("--lm_device", default='CPU', type=str,
                         help="Target device for the landmark regression model (default=%(default)s)")
-    parser.add_argument('--min_tracking_conf', type=float, default=0.7,
+    parser.add_argument('--min_tracking_conf', type=float, default=0.5,
                         help="Minimum confidence value ([0.0, 1.0]) from the landmark-tracking model for the pose landmarks to be considered tracked successfully,"+
                         " or otherwise person detection will be invoked automatically on the next input image. (default=%(default)s)")                    
     parser.add_argument('-c', '--crop', action="store_true", 
