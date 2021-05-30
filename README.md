@@ -11,7 +11,7 @@ For DepthAI version, please visit : [depthai_blazepose](https://github.com/geaxg
 
 You need OpenVINO, OpenCV, open3d (for 3d visualization). installed on your computer and to clone/download this repository.
 
-Note that the models were generated using OpenVINO 2021.2.
+Note that the models were generated using OpenVINO 2021.3.
 
 ## Run
 
@@ -104,6 +104,8 @@ optional arguments:
 - By default, the inferences are run on the CPU. For each model, you can choose the device where to run the model. For instance, if you want to run both models on a NCS2 :
 
     ```python3 BlazeposeOpenvino.py --pd_device MYRIAD --lm_device MYRIAD```
+
+    **Please note that the "heavy" model does not wrok on MYRIAD.**
 
 - By default, a temporal filter smoothes the landmark positions. You can tune the smoothing with the arguments *--filter_window_size* and *--filter_velocity_scale*. Use *--no_smoothing* to disable the filter.
 
