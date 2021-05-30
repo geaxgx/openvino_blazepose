@@ -105,7 +105,7 @@ optional arguments:
 
     ```python3 BlazeposeOpenvino.py --pd_device MYRIAD --lm_device MYRIAD```
 
-    **Please note that the "heavy" model does not wrok on MYRIAD.**
+    **Please note that the "heavy" model does not work on MYRIAD.**
 
 - By default, a temporal filter smoothes the landmark positions. You can tune the smoothing with the arguments *--filter_window_size* and *--filter_velocity_scale*. Use *--no_smoothing* to disable the filter.
 
@@ -135,7 +135,7 @@ You can directly find the model files (.xml and .bin) under the 'models' directo
 3) From DEST_DIR, run the tflite2tensorflow container:  ```./docker_tflite2tensorflow.sh```
 4) From the running container: 
 ```
-cd workdir
+cd workdir/models
 ./convert_models.sh
 ```
 The *convert_models.sh* converts the tflite models in tensorflow (.pb), then converts the pb file into Openvino IR format (.xml and .bin). By default, the precision used is FP32. To generate in FP16 precision, run ```./convert_models.sh FP16```
