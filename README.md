@@ -101,10 +101,11 @@ optional arguments:
 
 ![Gesture recognition](img/semaphore.gif)
 
-- By default, the inferences are run on the CPU. For each model, you can choose the device where to run the model. For instance, if you want to run both models on a NCS2 :
+- By default, the inferences are run on the CPU. For each model, you can choose the device where to run the model. For instance, if you want to run the landmark model on a NCS2 while the detection model is running on CPU (default) :
 
-    ```python3 BlazeposeOpenvino.py --pd_device MYRIAD --lm_device MYRIAD```
+    ```python3 BlazeposeOpenvino.py --lm_device MYRIAD --lm_xml models/pose_landmark_full_FP16.xml```
 
+    MYRIAD needs FP16 models.
     **Please note that the "heavy" model does not work on MYRIAD.**
 
 - By default, a temporal filter smoothes the landmark positions. You can tune the smoothing with the arguments *--filter_window_size* and *--filter_velocity_scale*. Use *--no_smoothing* to disable the filter.
@@ -125,7 +126,7 @@ In addition to the landmarks and a score, the tracker neural net outputs an arra
 You can directly find the model files (.xml and .bin) under the 'models' directory. Below I describe how to get the files in case you need to regenerate the models.
 
 1) Clone this github repository in a local directory (DEST_DIR)
-2) In DEST_DIR/models directory, download the source tflite models from Mediapipe:
+2) In DEST_DIR/models directory, download the source tflite models from this [archive](https://drive.google.com/file/d/1-7qyIDj__c6QPasTRXvUpui7k39rUaoS/view?usp=sharing) or from Mediapipe:
 * [Pose detection model](https://github.com/google/mediapipe/blob/master/mediapipe/modules/pose_detection/pose_detection.tflite)
 * [Full pose landmark model](https://github.com/google/mediapipe/tree/master/mediapipe/modules/pose_landmark/pose_landmark_full.tflite)
 * [Lite pose landmark model](https://github.com/google/mediapipe/tree/master/mediapipe/modules/pose_landmark/pose_landmark_lite.tflite)
@@ -138,12 +139,15 @@ You can directly find the model files (.xml and .bin) under the 'models' directo
 cd workdir/models
 ./convert_models.sh
 ```
-The *convert_models.sh* converts the tflite models in tensorflow (.pb), then converts the pb file into Openvino IR format (.xml and .bin). By default, the precision used is FP32. To generate in FP16 precision, run ```./convert_models.sh FP16```
+The *convert_models.sh* converts the tflite models in tensorflow (.pb), then converts the pb file into Openvino IR format (.xml and .bin). By default, the precision used is FP32. To generate in FP16 precision (needed for MyriadX), run ```./convert_models.sh FP16```
 
 
 
 **Explanation about the Model Optimizer params :**
-The frames read by OpenCV are BGR [0, 255] frames . The original tflite pose detection model is expecting RGB [-1, 1] frames. ```--reverse_input_channels``` converts BGR to RGB. ```--mean_values [127.5,127.5,127.5] --scale_values [127.5,127.5,127.5]``` normalizes the frames between [-1, 1]. The original hand landmark model is expecting RGB [0, 1] frames. Therefore, the following arguments are used ```--reverse_input_channels --scale_values [255.0, 255.0, 255.0]```
+
+The frames read by OpenCV are BGR [0, 255] frames . The original tflite pose detection model is expecting RGB [-1, 1] frames. ```--reverse_input_channels``` converts BGR to RGB. ```--mean_values [127.5,127.5,127.5] --scale_values [127.5,127.5,127.5]``` normalizes the frames between [-1, 1]. 
+
+The original landmark model is expecting RGB [0, 1] frames. Therefore, the following arguments are used ```--reverse_input_channels```, but unlike the detection model, we choose to do the normalization in the python code and not in the models (via ```--scale_values```). Indeed, we have observed a better accuracy with FP16 models when doing the normalization of the inputs outside of the models ([a possible explanation](https://github.com/PINTO0309/tflite2tensorflow/issues/9#issuecomment-842460014)).
 
 
 ## Credits

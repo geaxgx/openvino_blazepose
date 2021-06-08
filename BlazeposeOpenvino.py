@@ -180,8 +180,12 @@ class BlazeposeOpenvino:
         if output is None:
             self.output = None
         else:
-            fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-            self.output = cv2.VideoWriter(output,fourcc,self.video_fps,(video_width, video_height)) 
+            if self.input_type == "image":
+                # For an source image, we will output one image (and not a video) and exit
+                self.output = output
+            else:
+                fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+                self.output = cv2.VideoWriter(output,fourcc,self.video_fps,(video_width, video_height)) 
 
     def load_models(self, pd_xml, pd_device, lm_xml, lm_device):
 
@@ -497,7 +501,7 @@ class BlazeposeOpenvino:
                 for r in self.regions:
                     frame_nn = mpu.warp_rect_img(r.rect_points, video_frame, self.lm_w, self.lm_h)
                     # Transpose hxwx3 -> 1x3xhxw
-                    frame_nn = np.transpose(frame_nn, (2,0,1))[None,]
+                    frame_nn = np.transpose(frame_nn, (2,0,1))[None,] / 255.0
                     # Get landmarks
                     lm_rtrip_time = now()
                     inference = self.lm_exec_net.infer(inputs={self.lm_input_blob: frame_nn})
@@ -509,7 +513,7 @@ class BlazeposeOpenvino:
                 r = self.regions[0]
                 frame_nn = mpu.warp_rect_img(r.rect_points, video_frame, self.lm_w, self.lm_h)
                 # Transpose hxwx3 -> 1x3xhxw
-                frame_nn = np.transpose(frame_nn, (2,0,1))[None,]
+                frame_nn = np.transpose(frame_nn, (2,0,1))[None,] / 255.0
                 # Get landmarks
                 lm_rtrip_time = now()
                 inference = self.lm_exec_net.infer(inputs={self.lm_input_blob: frame_nn})
@@ -580,7 +584,11 @@ class BlazeposeOpenvino:
             cv2.imshow("Blazepose", annotated_frame)
 
             if self.output:
-                self.output.write(annotated_frame)
+                if self.input_type == "image":
+                    cv2.imwrite(self.output, annotated_frame)
+                    break
+                else:
+                    self.output.write(annotated_frame)
 
             key = cv2.waitKey(1) 
             if key == ord('q') or key == 27:
@@ -606,15 +614,16 @@ class BlazeposeOpenvino:
                 self.show_segmentation = not self.show_segmentation
 
         # Print some stats
-        global_fps, nb_frames = self.fps.get_global()
-        print(f"FPS : {global_fps:.1f} f/s (# frames = {nb_frames})")
-        print(f"# pose detection inferences : {nb_pd_inferences} - # direct: {nb_pd_inferences_direct} - # after landmarks ROI failures: {nb_pd_inferences-nb_pd_inferences_direct}")
-        print(f"# landmark inferences       : {nb_lm_inferences} - # after pose detection: {nb_lm_inferences - nb_lm_inferences_after_landmarks_ROI} - # after landmarks ROI prediction: {nb_lm_inferences_after_landmarks_ROI}")
-        print(f"Pose detection round trip   : {glob_pd_rtrip_time/nb_pd_inferences*1000:.1f} ms")
-        if nb_lm_inferences: 
-            print(f"Landmark round trip         : {glob_lm_rtrip_time/nb_lm_inferences*1000:.1f} ms")
+        if nb_pd_inferences > 1:
+            global_fps, nb_frames = self.fps.get_global()
+            print(f"FPS : {global_fps:.1f} f/s (# frames = {nb_frames})")
+            print(f"# pose detection inferences : {nb_pd_inferences} - # direct: {nb_pd_inferences_direct} - # after landmarks ROI failures: {nb_pd_inferences-nb_pd_inferences_direct}")
+            print(f"# landmark inferences       : {nb_lm_inferences} - # after pose detection: {nb_lm_inferences - nb_lm_inferences_after_landmarks_ROI} - # after landmarks ROI prediction: {nb_lm_inferences_after_landmarks_ROI}")
+            print(f"Pose detection round trip   : {glob_pd_rtrip_time/nb_pd_inferences*1000:.1f} ms")
+            if nb_lm_inferences: 
+                print(f"Landmark round trip         : {glob_lm_rtrip_time/nb_lm_inferences*1000:.1f} ms")
 
-        if self.output:
+        if self.output and self.input_type != "image":
             self.output.release()
            
 

@@ -32,7 +32,7 @@ convert_model () {
 		--schema_path ../../schema.fbs \
 		--output_pb \
 		--optimizing_for_openvino_and_myriad
-	# Generate Openvino "non normalized input" models: the normalization has to be mode explictly in the code
+	# For generating Openvino "non normalized input" models (the normalization would need to be made explictly in the code):
 	#tflite2tensorflow \
 	#  --model_path ${model_name}.tflite \
 	#  --model_output_path ${model_name} \
@@ -41,7 +41,7 @@ convert_model () {
 	#  --output_openvino_and_myriad 
 	# Generate Openvino "normalized input" models 
 	/opt/intel/openvino_2021/deployment_tools/model_optimizer/mo_tf.py \
-		--input_model ${model_name}/model_float32.pb \
+		--saved_model_dir ${model_name} \
 		--model_name ${model_name}_${FP} \
 		--data_type ${FP} \
 		${arg_mean_values} \
@@ -50,9 +50,9 @@ convert_model () {
 }
 
 convert_model pose_detection "[127.5,127.5,127.5]"  "[127.5,127.5,127.5]"
-convert_model pose_landmark_full "" "[255.0,255.0,255.0]"
-convert_model pose_landmark_lite "" "[255.0,255.0,255.0]"
-convert_model pose_landmark_heavy "" "[255.0,255.0,255.0]"
+convert_model pose_landmark_full "" ""
+convert_model pose_landmark_lite "" ""
+convert_model pose_landmark_heavy "" ""
 
 # Strangely the output layer names are not consistent through the mediapipe landmark models
 # Lite model uses : output_poseflag, output_segmentation, output_heatmap, world_3d, ld_3d
@@ -67,4 +67,8 @@ do
 	replace $f Identity_4 world_3d
 	replace $f Identity ld_3d
 done
-
+# For Interpolate layers, replace in coordinate_transformation_mode, "half_pixel" by "align_corners"  (bug optimizer)
+for f in pose_landmark_full_${FP}.xml pose_landmark_heavy_${FP}.xml pose_landmark_lite_${FP}.xml
+do
+        replace $f half_pixel align_corners
+done
